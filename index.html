@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoidPass - P2P File Transfer</title>
+    <!-- Import PeerJS for WebRTC and QRCode.js for generating the QR code -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; color: #333; display: flex; justify-content: center; padding: 2rem; }
+        .container { background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 500px; width: 100%; text-align: center; }
+        .hidden { display: none !important; }
+        input[type="file"], input[type="text"] { width: 100%; padding: 10px; margin: 10px 0; box-sizing: border-box; }
+        button { background: #007bff; color: white; border: none; padding: 12px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; margin-top: 10px; width: 100%; transition: 0.3s; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        #qrcode { margin: 20px auto; display: flex; justify-content: center; }
+        .info-box { background: #e9ecef; padding: 15px; border-radius: 5px; margin: 15px 0; text-align: left; font-size: 14px; }
+        .share-link { word-break: break-all; background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin-top: 10px; }
+        .status { font-weight: bold; color: #28a745; margin-top: 15px; }
+        .logo { font-size: 28px; font-weight: bold; margin-bottom: 20px; color: #333; }
+        .logo span { color: #007bff; }
+        
+        /* Progress Bar Styles */
+        .progress-container { margin-top: 20px; text-align: left; }
+        progress { width: 100%; height: 22px; border-radius: 5px; appearance: none; -webkit-appearance: none; }
+        progress::-webkit-progress-bar { background-color: #e9ecef; border-radius: 5px; }
+        progress::-webkit-progress-value { background-color: #28a745; border-radius: 5px; }
+        progress::-moz-progress-bar { background-color: #28a745; border-radius: 5px; }
+        .progress-text { font-size: 14px; margin-bottom: 5px; display: flex; justify-content: space-between; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="logo">Void<span>Pass</span> 🚀</div>
+
+    <!-- SENDER PANEL -->
+    <div id="sender-panel" class="hidden">
+        <div id="file-selection">
+            <p>Select a file to send (P2P - No Size Limits):</p>
+            <input type="file" id="file-input">
+            <input type="text" id="file-desc" placeholder="Optional file description...">
+            <button id="btn-generate">Generate Secure Link</button>
+        </div>
+
+        <div id="share-section" class="hidden">
+            <div class="info-box">
+                <strong>File:</strong> <span id="lbl-filename"></span> <br>
+                <strong>Size:</strong> <span id="lbl-filesize"></span>
+            </div>
+            <p>Share this link or scan the QR code:</p>
+            <div class="share-link" id="link-display"></div>
+            <button id="btn-copy">Copy to Clipboard</button>
+            <div id="qrcode"></div>
+            <p id="sender-status">Waiting for the receiver to connect...</p>
+            
+            <div id="sender-progress-container" class="progress-container hidden">
+                <div class="progress-text">
+                    <span>Uploading...</span>
+                    <span id="sender-progress-text">0%</span>
+                </div>
+                <progress id="sender-progress-bar" value="0" max="100"></progress>
+            </div>
+        </div>
+        
+        <div id="sender-success" class="hidden">
+            <p class="status">Transfer completed successfully!</p>
+            <button onclick="location.href=location.pathname">Send another file</button>
+        </div>
+    </div>
+
+    <!-- RECEIVER PANEL -->
+    <div id="receiver-panel" class="hidden">
+        <p id="receiver-status">Connecting to the sender...</p>
+        
+        <div id="download-section" class="hidden">
+            <div class="info-box">
+                <strong>Available file:</strong> <span id="recv-filename"></span> <br>
+                <strong>Size:</strong> <span id="recv-filesize"></span> <br>
+                <strong>Description:</strong> <span id="recv-desc"></span>
+            </div>
+            <button id="btn-download">Start Download</button>
+            
+            <div id="receiver-progress-container" class="progress-container hidden">
+                <div class="progress-text">
+                    <span>Downloading...</span>
+                    <span id="receiver-progress-text">0%</span>
+                </div>
+                <progress id="receiver-progress-bar" value="0" max="100"></progress>
+            </div>
+        </div>
+
+        <div id="receiver-success" class="hidden">
+            <p class="status">File received and saved to your device!</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Utility function to format bytes to MB, GB, etc.
+    function formatBytes(bytes, decimals = 2) {
+        if (!+bytes) return '0 Bytes';
+        const k = 1024;
+        const dm = decimals < 0 ? 0 : decimals;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+    }
+
+    // Global variables
+    let peer;
+    let conn;
+    let fileToSend = null;
+    let fileMetadata = {};
+
+    // Chunking configuration
+    const CHUNK_SIZE = 1024 * 1024; // 1 Megabyte chunks
+    let currentOffset = 0;
+
+    // Receiver file handling variables
+    let fileStream = null;
+    let receivedArray = [];
+    let receivedBytes = 0;
+
+    // DOM Elements
+    const senderPanel = document.getElementById('sender-panel');
+    const receiverPanel = document.getElementById('receiver-panel');
+    
+    // Determine if we are the sender or the receiver
+    const urlParams = new URLSearchParams(window.location.search);
+    const targetPeerId = urlParams.get('peer');
+
+    if (targetPeerId) {
+        initReceiver(targetPeerId);
+    } else {
+        initSender();
+    }
+
+    // ==========================================
+    // SENDER LOGIC
+    // ==========================================
+    function initSender() {
+        senderPanel.classList.remove('hidden');
+
+        document.getElementById('btn-generate').addEventListener('click', () => {
+            const fileInput = document.getElementById('file-input');
+            if (fileInput.files.length === 0) {
+                alert("Please select a file first.");
+                return;
+            }
+
+            fileToSend = fileInput.files[0];
+            fileMetadata = {
+                name: fileToSend.name,
+                rawSize: fileToSend.size,
+                size: formatBytes(fileToSend.size),
+                desc: document.getElementById('file-desc').value || 'No description provided'
+            };
+
+            peer = new Peer(); 
+            
+            peer.on('open', (id) => {
+                const shareUrl = `${window.location.origin}${window.location.pathname}?peer=${id}`;
+                
+                document.getElementById('file-selection').classList.add('hidden');
+                document.getElementById('share-section').classList.remove('hidden');
+                document.getElementById('lbl-filename').innerText = fileMetadata.name;
+                document.getElementById('lbl-filesize').innerText = fileMetadata.size;
+                document.getElementById('link-display').innerText = shareUrl;
+
+                new QRCode(document.getElementById("qrcode"), {
+                    text: shareUrl, width: 150, height: 150
+                });
+
+                document.getElementById('btn-copy').onclick = () => {
+                    navigator.clipboard.writeText(shareUrl);
+                    alert("Link copied!");
+                };
+            });
+
+            peer.on('connection', (connection) => {
+                conn = connection;
+                document.getElementById('sender-status').innerText = "Receiver connected! Waiting for them to start...";
+
+                conn.on('data', (data) => {
+                    if (data.type === 'REQUEST_INFO') {
+                        conn.send({ type: 'FILE_INFO', metadata: fileMetadata });
+                    } 
+                    else if (data.type === 'START_DOWNLOAD') {
+                        document.getElementById('sender-status').innerText = "Transferring data...";
+                        document.getElementById('sender-progress-container').classList.remove('hidden');
+                        currentOffset = 0;
+                        readAndSendNextChunk();
+                    }
+                    else if (data.type === 'CHUNK_ACK') {
+                        // The receiver successfully processed the last chunk, send the next one
+                        readAndSendNextChunk();
+                    }
+                    else if (data.type === 'TRANSFER_COMPLETE') {
+                        document.getElementById('share-section').classList.add('hidden');
+                        document.getElementById('sender-success').classList.remove('hidden');
+                    }
+                });
+            });
+        });
+    }
+
+    // Read a slice of the file and send it
+    function readAndSendNextChunk() {
+        const chunk = fileToSend.slice(currentOffset, currentOffset + CHUNK_SIZE);
+        const reader = new FileReader();
+        
+        reader.onload = (e) => {
+            const dataBuffer = e.target.result;
+            const isLast = (currentOffset + CHUNK_SIZE) >= fileToSend.size;
+            
+            conn.send({
+                type: 'FILE_CHUNK',
+                data: dataBuffer,
+                isLast: isLast
+            });
+            
+            currentOffset += dataBuffer.byteLength;
+            
+            // Update Sender UI
+            const percentage = ((currentOffset / fileToSend.size) * 100).toFixed(1);
+            document.getElementById('sender-progress-bar').value = percentage;
+            document.getElementById('sender-progress-text').innerText = `${percentage}% (${formatBytes(currentOffset)} / ${formatBytes(fileToSend.size)})`;
+        };
+        
+        reader.readAsArrayBuffer(chunk);
+    }
+
+    // ==========================================
+    // RECEIVER LOGIC
+    // ==========================================
+    function initReceiver(targetId) {
+        receiverPanel.classList.remove('hidden');
+        peer = new Peer();
+
+        peer.on('open', () => {
+            conn = peer.connect(targetId, { reliable: true });
+
+            conn.on('open', () => {
+                document.getElementById('receiver-status').innerText = "Connected. Requesting file data...";
+                conn.send({ type: 'REQUEST_INFO' });
+            });
+
+            conn.on('data', async (data) => {
+                if (data.type === 'FILE_INFO') {
+                    fileMetadata = data.metadata;
+                    document.getElementById('receiver-status').classList.add('hidden');
+                    document.getElementById('download-section').classList.remove('hidden');
+                    
+                    document.getElementById('recv-filename').innerText = fileMetadata.name;
+                    document.getElementById('recv-filesize').innerText = fileMetadata.size;
+                    document.getElementById('recv-desc').innerText = fileMetadata.desc;
+                } 
+                else if (data.type === 'FILE_CHUNK') {
+                    receivedBytes += data.data.byteLength;
+                    
+                    // Update Receiver UI
+                    const percentage = ((receivedBytes / fileMetadata.rawSize) * 100).toFixed(1);
+                    document.getElementById('receiver-progress-bar').value = percentage;
+                    document.getElementById('receiver-progress-text').innerText = `${percentage}% (${formatBytes(receivedBytes)} / ${formatBytes(fileMetadata.rawSize)})`;
+
+                    // Write chunk directly to disk (if supported) or to RAM array
+                    if (fileStream) {
+                        await fileStream.write(data.data);
+                    } else {
+                        receivedArray.push(data.data);
+                    }
+
+                    if (data.isLast) {
+                        if (fileStream) {
+                            await fileStream.close();
+                        } else {
+                            // Fallback: merge RAM chunks into a Blob and trigger standard download
+                            const blob = new Blob(receivedArray);
+                            const downloadUrl = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.style.display = 'none';
+                            a.href = downloadUrl;
+                            a.download = fileMetadata.name;
+                            document.body.appendChild(a);
+                            a.click();
+                            window.URL.revokeObjectURL(downloadUrl);
+                            receivedArray = []; // Free up memory
+                        }
+                        
+                        conn.send({ type: 'TRANSFER_COMPLETE' });
+                        document.getElementById('download-section').classList.add('hidden');
+                        document.getElementById('receiver-success').classList.remove('hidden');
+                    } else {
+                        // Request the next chunk from the sender
+                        conn.send({ type: 'CHUNK_ACK' });
+                    }
+                }
+            });
+
+            conn.on('close', () => {
+                alert("The connection was lost.");
+                window.location.href = window.location.pathname; 
+            });
+        });
+
+        // Start Download Click Event
+        document.getElementById('btn-download').addEventListener('click', async () => {
+            
+            // 1. Try to use modern direct-to-disk File System Access API (Chrome/Edge/Opera)
+            if ('showSaveFilePicker' in window) {
+                try {
+                    const handle = await window.showSaveFilePicker({ suggestedName: fileMetadata.name });
+                    fileStream = await handle.createWritable();
+                } catch (e) {
+                    // User cancelled the save dialog
+                    return; 
+                }
+            } else {
+                // 2. Fallback for Firefox/Safari
+                alert("Note: Your browser doesn't support direct-to-disk streaming. The file will be held in memory until fully received. Very large files (GBs) might crash the browser tab.");
+                receivedArray = [];
+            }
+
+            document.getElementById('btn-download').classList.add('hidden');
+            document.getElementById('receiver-progress-container').classList.remove('hidden');
+            
+            receivedBytes = 0;
+            conn.send({ type: 'START_DOWNLOAD' });
+        });
+    }
+</script>
+
+</body>
+</html>
