@@ -30,3 +30,33 @@ If you have Python installed, open your terminal/command prompt in the project f
 ```bash
 # Python 3
 python -m http.server 8000
+```
+Then, open your browser and navigate to http://localhost:8000.
+
+### Option C: Host it for free
+
+Since it's a static site, you can instantly deploy it for free on platforms like:
+* GitHub Pages
+* Vercel
+* Netlify
+
+## 🌐 Browser Compatibility
+
+| Feature | Chrome / Edge / Opera | Firefox | Safari |
+| :--- | :---: | :---: | :---: |
+| **WebRTC P2P Transfer** | ✅ Supported | ✅ Supported | ✅ Supported |
+| **Direct-to-Disk Streaming** | ✅ Supported | ⚠️ Fallback to RAM | ⚠️ Fallback to RAM |
+| **Rich Clipboard (Text + Image)**| ✅ Supported | ⚠️ Text Only | ✅ Supported |
+
+*Note: On browsers that do not support the File System Access API (like Firefox), large files are held in RAM until the transfer completes. Receiving extremely large files (several GBs) on these browsers may cause the tab to crash.*
+
+## 💻 Built With
+
+* **HTML5, CSS3, Vanilla JavaScript**
+* [**PeerJS**](https://peerjs.com/) - WebRTC wrapper and free signaling server.
+* [**QRCode.js**](https://davidshimjs.github.io/qrcodejs/) - Cross-browser QR code generation.
+
+## 📄 License
+
+This project is open-source and available under the [MIT License](LICENSE).
+
